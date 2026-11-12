@@ -1,0 +1,14 @@
+/build/
+/dist/
+__pycache__/
+*.py[cod]
+*.ipa
+*.dylib
+*.o
+*.dSYM/
+.DS_Store
+.env
+.env.*
+*.p12
+*.p8
+*.mobileprovision
