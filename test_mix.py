@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import plistlib
 import subprocess
 import unittest
 import zipfile
@@ -7,6 +8,23 @@ import zipfile
 import build
 
 ROOT = Path(__file__).resolve().parent
+
+
+def find_packaged_build():
+    """Return (ipa path, app directory) for a root IPA already carrying the current module."""
+    for path in sorted(ROOT.glob(f'*{build.SUFFIX}')):
+        try:
+            with zipfile.ZipFile(path) as archive:
+                members = [name for name in archive.namelist()
+                           if name.startswith('Payload/') and name.endswith(f'/Frameworks/{build.MODULE_NAME}.dylib')]
+        except zipfile.BadZipFile:
+            continue
+        if members:
+            return path, members[0].rsplit('/Frameworks/', 1)[0]
+    return None, None
+
+
+PACKAGED_IPA, PACKAGED_APP = find_packaged_build()
 
 HARNESS = r'''
 #include <assert.h>
@@ -169,7 +187,7 @@ class MixingTests(unittest.TestCase):
     def test_native_hook_logic(self):
         directory = ROOT / 'build'
         directory.mkdir(exist_ok=True)
-        source = (ROOT / 'DouyuMusicMix.c').read_text().replace('__attribute__((constructor))', '')
+        source = (ROOT / f'{build.MODULE_NAME}.c').read_text().replace('__attribute__((constructor))', '')
         harness = directory / 'test_hooks.c'
         runtime = directory / 'mock_runtime.c'
         executable = directory / 'test_hooks'
@@ -182,19 +200,20 @@ class MixingTests(unittest.TestCase):
     def test_dylib_build(self):
         directory = ROOT / 'build'
         directory.mkdir(exist_ok=True)
-        library = directory / 'test-DouyuMusicMix.dylib'
+        library = directory / f'test-{build.MODULE_NAME}.dylib'
         build.build_library(library)
         self.assertEqual(build.verify_signature(library.read_bytes()), 1)
 
-    @unittest.skipUnless((ROOT / 'DouyuHD-1.950-MusicMix.ipa').exists(),
+    @unittest.skipUnless(PACKAGED_IPA and (ROOT / f'{build.MODULE_NAME}.dylib').exists(),
                          'Optional IPA integration test: first build using your own IPA')
     def test_packaged_signatures_and_injection(self):
-        with zipfile.ZipFile(ROOT / 'DouyuHD-1.950-MusicMix.ipa') as archive:
-            app = archive.read('Payload/liveHD.app/liveHD')
-            library = archive.read('Payload/liveHD.app/Frameworks/DouyuMusicMix.dylib')
+        with zipfile.ZipFile(PACKAGED_IPA) as archive:
+            info = plistlib.loads(archive.read(f'{PACKAGED_APP}/Info.plist'))
+            app = archive.read(f"{PACKAGED_APP}/{info['CFBundleExecutable']}")
+            library = archive.read(f'{PACKAGED_APP}/Frameworks/{build.MODULE_NAME}.dylib')
             self.assertEqual(build.verify_signature(app), 2)
             self.assertEqual(build.verify_signature(library), 1)
-            self.assertEqual(library, (ROOT / 'DouyuMusicMix.dylib').read_bytes())
+            self.assertEqual(library, (ROOT / f'{build.MODULE_NAME}.dylib').read_bytes())
             self.assertEqual(app.count(build.LOAD_PATH), 1)
             with self.assertRaisesRegex(ValueError, 'already injected'):
                 build.inject(app)

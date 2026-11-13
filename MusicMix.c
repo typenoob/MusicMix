@@ -88,7 +88,7 @@ static Boolean prepareActivation(Object self, Object *error) {
     if (updated == options && (!name || strcmp(name, "AVAudioSessionCategorySoloAmbient"))) return 1;
     Boolean result = ((CategoryOptionsFn)objc_msgSend)(self, categoryOptionsSelector,
                                                       mixedCategory(category), updated, error);
-    if (!result) syslog(4, "[DouyuMusicMix] Mixing rejected: category=%s options=0x%lx; activation blocked",
+    if (!result) syslog(4, "[MusicMix] Mixing rejected: category=%s options=0x%lx; activation blocked",
                         name ? name : "(nil)", updated);
     return result;
 }
@@ -106,7 +106,7 @@ static Boolean hookActiveOptions(Object self, Selector cmd, Boolean active, Opti
 __attribute__((constructor)) static void installMixing(void) {
     Class cls = objc_getClass("AVAudioSession");
     if (!cls) {
-        syslog(3, "[DouyuMusicMix] AVAudioSession is unavailable; hooks not installed");
+        syslog(3, "[MusicMix] AVAudioSession is unavailable; hooks not installed");
         return;
     }
     categoryOptionsSelector = sel_registerName("setCategory:withOptions:error:");
@@ -126,7 +126,7 @@ __attribute__((constructor)) static void installMixing(void) {
     };
     for (unsigned int i = 0; i < sizeof(methods) / sizeof(methods[0]); ++i) {
         if (!methods[i]) {
-            syslog(3, "[DouyuMusicMix] Required audio-session method %u is unavailable", i);
+            syslog(3, "[MusicMix] Required audio-session method %u is unavailable", i);
             return;
         }
     }
@@ -141,5 +141,5 @@ __attribute__((constructor)) static void installMixing(void) {
     method_setImplementation(methods[3], (Implementation)hookCategoryPolicy);
     method_setImplementation(methods[4], (Implementation)hookActive);
     method_setImplementation(methods[5], (Implementation)hookActiveOptions);
-    syslog(5, "[DouyuMusicMix] Installed six audio-session hooks (1.0)");
+    syslog(5, "[MusicMix] Installed six audio-session hooks (1.0)");
 }

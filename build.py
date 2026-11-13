@@ -10,7 +10,10 @@ import subprocess
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
-LOAD_PATH = b"@executable_path/Frameworks/DouyuMusicMix.dylib\0"
+MODULE_NAME = 'MusicMix'
+LOAD_PATH = f'@executable_path/Frameworks/{MODULE_NAME}.dylib\0'.encode()
+SUFFIX = f'-{MODULE_NAME}.ipa'
+STEM_SUFFIX = SUFFIX[:-len('.ipa')]
 
 
 def commands(data):
@@ -185,31 +188,38 @@ def build_library(output):
     write_stub(build / 'AVFoundation.tbd', '/System/Library/Frameworks/AVFoundation.framework/AVFoundation', [])
     subprocess.run([compiler, '-target', 'arm64-apple-ios15.0', '-std=c11', '-Oz', '-fPIC',
                     '-ffreestanding', '-fno-stack-protector', '-fvisibility=hidden', '-Wall', '-Wextra', '-Werror',
-                    '-c', str(ROOT / 'DouyuMusicMix.c'), '-o', str(build / 'DouyuMusicMix.o')], check=True)
+                    '-c', str(ROOT / f'{MODULE_NAME}.c'), '-o', str(build / f'{MODULE_NAME}.o')], check=True)
     subprocess.run([linker, '-dylib', '-arch', 'arm64', '-platform_version', 'ios', '15.0', '15.0',
                     '-install_name', LOAD_PATH.rstrip(b'\0').decode(), '-current_version', '1.0',
                     '-compatibility_version', '1.0', '-adhoc_codesign', '-no_fixup_chains',
-                    '-no_exported_symbols', '-o', str(output), str(build / 'DouyuMusicMix.o'),
+                    '-no_exported_symbols', '-o', str(output), str(build / f'{MODULE_NAME}.o'),
                     str(build / 'libobjc.tbd'), str(build / 'libSystem.tbd'),
                     '-needed_library', str(build / 'AVFoundation.tbd')], check=True)
     verify_signature(output.read_bytes())
 
 
+def package_name(source):
+    stem = source.name[:-len('.ipa')] if source.name.lower().endswith('.ipa') else source.name
+    if stem.endswith(STEM_SUFFIX):
+        stem = stem[:-len(STEM_SUFFIX)]
+    return ROOT / f'{stem}{SUFFIX}'
+
+
 def main():
-    parser = argparse.ArgumentParser(description='Build DouyuMusicMix or inject your own unencrypted Douyu HD 1.950 IPA.')
-    parser.add_argument('ipa', nargs='?', type=Path, help='Path to your own Douyu HD 1.950 (264) IPA')
+    parser = argparse.ArgumentParser(description=f'Build {MODULE_NAME} or inject your own unencrypted app IPA.')
+    parser.add_argument('ipa', nargs='?', type=Path, help='Path to your own unencrypted IPA')
     parser.add_argument('--dylib-only', action='store_true', help='Build the standalone dylib without an IPA')
     args = parser.parse_args()
     if (args.ipa is not None) == args.dylib_only:
         parser.error('Provide an IPA path or --dylib-only, but not both')
-    output = ROOT / 'DouyuHD-1.950-MusicMix.ipa'
-    library = ROOT / 'DouyuMusicMix.dylib'
+    library = ROOT / f'{MODULE_NAME}.dylib'
     if args.dylib_only:
         build_library(library)
         print(f'{library.name}: {library.stat().st_size} bytes; SHA256 {hashlib.sha256(library.read_bytes()).hexdigest()}')
         return
     source = args.ipa.resolve()
-    if source == output.resolve():
+    output = package_name(source)
+    if source == output:
         raise ValueError('Input must not be the output IPA')
     build_library(library)
     with zipfile.ZipFile(source) as original:
@@ -219,10 +229,10 @@ def main():
             raise ValueError('Expected one top-level application')
         info_path = info_files[0]
         info = plistlib.loads(original.read(info_path))
-        if (info.get('CFBundleIdentifier'), info.get('CFBundleShortVersionString'), info.get('CFBundleVersion')) != ('tv.douyu.liveHD', '1.950', '264'):
-            raise ValueError('This build targets Douyu HD 1.950 (264) only')
         app = info_path.rsplit('/', 1)[0]
         executable = app + '/' + info['CFBundleExecutable']
+        print(f"Target: {info.get('CFBundleIdentifier')} {info.get('CFBundleShortVersionString')} "
+              f"({info.get('CFBundleVersion')})")
         before = original.read(executable)
         patched = inject(before)
         verify_signature(patched)
@@ -234,7 +244,7 @@ def main():
             for entry in original.infolist():
                 data = patched if entry.filename == executable else original.read(entry)
                 result.writestr(entry, data)
-            entry = zipfile.ZipInfo(app + '/Frameworks/DouyuMusicMix.dylib')
+            entry = zipfile.ZipInfo(f'{app}/Frameworks/{MODULE_NAME}.dylib')
             entry.create_system = 3
             entry.external_attr = 0o100755 << 16
             entry.compress_type = zipfile.ZIP_DEFLATED
@@ -243,7 +253,7 @@ def main():
         if result.testzip() is not None:
             raise ValueError('Output ZIP CRC validation failed')
         verify_signature(result.read(executable))
-        verify_signature(result.read(app + '/Frameworks/DouyuMusicMix.dylib'))
+        verify_signature(result.read(f'{app}/Frameworks/{MODULE_NAME}.dylib'))
     for path in (library, output):
         print(f'{path.name}: {path.stat().st_size} bytes; SHA256 {hashlib.sha256(path.read_bytes()).hexdigest()}')
     print('Verified Mach-O code-page hashes, embedded entitlement hashes, unchanged entitlements and ZIP CRCs.')
